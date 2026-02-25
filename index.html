@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paper Daily - HCI & AI</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { fontFamily: {
+        sans: ['-apple-system','BlinkMacSystemFont','Inter','Segoe UI','Noto Sans SC','sans-serif']
+      }}}
+    }
+  </script>
+  <style>
+    .abstract-text{max-height:0;overflow:hidden;transition:max-height .3s ease}
+    .abstract-text.open{max-height:800px}
+    .cat-pill{@apply px-2 py-0.5 rounded-full text-xs font-medium}
+    .tab-btn{@apply px-4 py-2 text-sm font-medium rounded-lg transition-colors cursor-pointer}
+    .tab-btn.active{@apply bg-indigo-600 text-white shadow-sm}
+    .tab-btn:not(.active){@apply text-slate-600 hover:bg-slate-200}
+    body{-webkit-font-smoothing:antialiased}
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+      <h1 class="text-xl font-bold text-indigo-600 whitespace-nowrap tracking-tight">Paper Daily</h1>
+      <div class="flex-1 max-w-md">
+        <input id="searchInput" type="text" placeholder="Search papers..."
+          class="w-full px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent
+                 placeholder:text-slate-400">
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="prevDate" class="p-1.5 rounded-md hover:bg-slate-100 text-slate-500 cursor-pointer">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <span id="currentDate" class="text-sm font-medium text-slate-700 min-w-[90px] text-center"></span>
+        <button id="nextDate" class="p-1.5 rounded-md hover:bg-slate-100 text-slate-500 cursor-pointer">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="max-w-5xl mx-auto px-4 pb-2 flex gap-1.5 overflow-x-auto">
+      <button class="tab-btn active" data-cat="all">All <span class="ml-1 opacity-70" id="count-all"></span></button>
+      <button class="tab-btn" data-cat="cs.HC">HCI <span class="ml-1 opacity-70" id="count-cs.HC"></span></button>
+      <button class="tab-btn" data-cat="cs.AI">AI <span class="ml-1 opacity-70" id="count-cs.AI"></span></button>
+      <button class="tab-btn" data-cat="cs.CL">NLP <span class="ml-1 opacity-70" id="count-cs.CL"></span></button>
+      <button class="tab-btn" data-cat="cs.LG">ML <span class="ml-1 opacity-70" id="count-cs.LG"></span></button>
+      <button class="tab-btn" data-cat="trending">Trending <span class="ml-1 opacity-70" id="count-trending"></span></button>
+      <button class="tab-btn" data-cat="starred"><span class="text-amber-500">&#9733;</span> Starred <span class="ml-1 opacity-70" id="count-starred"></span></button>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="max-w-5xl mx-auto px-4 py-6">
+    <div id="loading" class="hidden text-center py-20">
+      <div class="inline-block w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+      <p class="mt-3 text-slate-500 text-sm">Loading papers...</p>
+    </div>
+    <div id="empty" class="hidden text-center py-20">
+      <div class="text-5xl mb-4">&#128240;</div>
+      <p class="text-slate-500 mb-2">No papers for this date yet</p>
+      <p class="text-slate-400 text-sm">Papers are fetched daily at ~7:00 AM UTC</p>
+    </div>
+    <div id="paperList" class="space-y-3"></div>
+  </main>
+
+  <footer class="max-w-5xl mx-auto px-4 py-8 text-center text-xs text-slate-400">
+    Data from arXiv &amp; HuggingFace Daily Papers &middot; Auto-updated via GitHub Actions
+  </footer>
+
+  <script>
+    // ── State ──
+    const today = new Date().toISOString().slice(0,10);
+    let state = { date: today, category: 'all', search: '', papers: [], allPapers: [], dates: [] };
+    const stars = JSON.parse(localStorage.getItem('paper-daily-stars') || '{}');
+
+    const CAT_STYLES = {
+      'cs.HC':'bg-purple-100 text-purple-700','cs.AI':'bg-blue-100 text-blue-700',
+      'cs.CL':'bg-emerald-100 text-emerald-700','cs.LG':'bg-amber-100 text-amber-700',
+      'cs.CV':'bg-rose-100 text-rose-700','cs.IR':'bg-cyan-100 text-cyan-700',
+      'cs.MA':'bg-teal-100 text-teal-700','cs.RO':'bg-pink-100 text-pink-700',
+      'trending':'bg-red-100 text-red-600',
+    };
+    const DEFAULT_STYLE = 'bg-slate-100 text-slate-600';
+
+    const $list=document.getElementById('paperList'),
+          $loading=document.getElementById('loading'),
+          $empty=document.getElementById('empty'),
+          $date=document.getElementById('currentDate'),
+          $search=document.getElementById('searchInput');
+
+    // ── Init ──
+    init();
+    async function init(){
+      $date.textContent = state.date;
+      bindEvents();
+      await loadDates();
+      await loadPapers();
+    }
+
+    function bindEvents(){
+      document.querySelectorAll('.tab-btn').forEach(b=>{
+        b.addEventListener('click',()=>{
+          state.category=b.dataset.cat;
+          document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));
+          b.classList.add('active');
+          filterAndRender();
+        });
+      });
+      let t;
+      $search.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(()=>{state.search=$search.value.trim();filterAndRender()},250)});
+      document.getElementById('prevDate').addEventListener('click',()=>changeDate(-1));
+      document.getElementById('nextDate').addEventListener('click',()=>changeDate(1));
+    }
+
+    // ── Data ──
+    async function loadDates(){
+      try{
+        const r=await fetch('data/dates.json');
+        state.dates=await r.json();
+        // If today not in dates, use most recent
+        if(!state.dates.includes(state.date)&&state.dates.length>0) state.date=state.dates[0];
+        $date.textContent=state.date;
+      }catch(e){state.dates=[];}
+    }
+
+    async function loadPapers(){
+      $loading.classList.remove('hidden');$empty.classList.add('hidden');$list.innerHTML='';
+      try{
+        const r=await fetch(`data/${state.date}.json`);
+        state.allPapers=await r.json();
+        // Apply star state from localStorage
+        state.allPapers.forEach(p=>p.starred=stars[p.arxiv_id]?1:0);
+      }catch(e){state.allPapers=[];}
+      $loading.classList.add('hidden');
+      filterAndRender();
+    }
+
+    function filterAndRender(){
+      let papers=state.allPapers;
+      const cat=state.category, q=state.search.toLowerCase();
+
+      if(cat==='starred'){
+        // Show starred from all dates - collect from localStorage
+        papers=papers.filter(p=>stars[p.arxiv_id]);
+      }else if(cat!=='all'){
+        papers=papers.filter(p=>(p.categories||[]).includes(cat));
+      }
+      if(q) papers=papers.filter(p=>(p.title||'').toLowerCase().includes(q)||(p.abstract||'').toLowerCase().includes(q));
+
+      state.papers=papers;
+      updateStats();
+      if(papers.length===0){$empty.classList.remove('hidden');$list.innerHTML=''}
+      else{$empty.classList.add('hidden');renderPapers()}
+    }
+
+    function updateStats(){
+      const all=state.allPapers;
+      setText('count-all',all.length||'');
+      const cats=['cs.HC','cs.AI','cs.CL','cs.LG','trending'];
+      cats.forEach(c=>setText(`count-${c}`,all.filter(p=>(p.categories||[]).includes(c)).length||''));
+      setText('count-starred',Object.keys(stars).length||'');
+    }
+
+    // ── Render ──
+    function renderPapers(){
+      $list.innerHTML=state.papers.map(paperCard).join('');
+    }
+
+    function paperCard(p){
+      const authors=p.authors.length>4
+        ?p.authors.slice(0,3).join(', ')+` <span class="text-slate-400">+${p.authors.length-3} more</span>`
+        :p.authors.join(', ');
+      const cats=(p.categories||[]).map(c=>`<span class="cat-pill ${CAT_STYLES[c]||DEFAULT_STYLE}">${c}</span>`).join('');
+      const isStarred=!!stars[p.arxiv_id];
+      const starCls=isStarred?'text-amber-400':'text-slate-300 hover:text-amber-300';
+      const starChr=isStarred?'&#9733;':'&#9734;';
+      const eid=p.arxiv_id.replace(/'/g,"\\'");
+      return `
+        <article class="bg-white rounded-xl border border-slate-200 hover:border-slate-300 shadow-sm hover:shadow transition-all p-5">
+          <div class="flex gap-3">
+            <button onclick="toggleStar('${eid}')" class="mt-0.5 text-xl leading-none ${starCls} transition-colors flex-shrink-0 cursor-pointer" title="Star">${starChr}</button>
+            <div class="flex-1 min-w-0">
+              <h2 class="text-[15px] font-semibold leading-snug text-slate-800 cursor-pointer hover:text-indigo-600 transition-colors"
+                  onclick="this.parentElement.querySelector('.abstract-text').classList.toggle('open')">${esc(p.title)}</h2>
+              <p class="mt-1 text-xs text-slate-500 leading-relaxed">${authors}</p>
+              <div class="mt-2 flex flex-wrap items-center gap-1.5">${cats}<span class="text-xs text-slate-400 ml-auto">${p.published||''}</span></div>
+              <div class="abstract-text mt-3 text-sm text-slate-600 leading-relaxed"><p>${esc(p.abstract)}</p></div>
+              <div class="mt-3 flex gap-3 text-xs">
+                <a href="${p.pdf_url}" target="_blank" rel="noopener" class="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>PDF</a>
+                <a href="${p.url}" target="_blank" rel="noopener" class="inline-flex items-center gap-1 text-slate-500 hover:text-slate-700 font-medium">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>arXiv</a>
+              </div>
+            </div>
+          </div>
+        </article>`;
+    }
+
+    // ── Actions ──
+    function toggleStar(id){
+      if(stars[id]) delete stars[id]; else stars[id]=1;
+      localStorage.setItem('paper-daily-stars',JSON.stringify(stars));
+      state.allPapers.forEach(p=>{if(p.arxiv_id===id) p.starred=stars[id]?1:0});
+      filterAndRender();
+    }
+
+    function changeDate(d){
+      const i=state.dates.indexOf(state.date);
+      if(d<0&&i<state.dates.length-1) state.date=state.dates[i+1];
+      else if(d>0&&i>0) state.date=state.dates[i-1];
+      else if(i===-1&&state.dates.length) state.date=state.dates[0];
+      $date.textContent=state.date;
+      loadPapers();
+    }
+
+    function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+    function setText(id,v){const e=document.getElementById(id);if(e)e.textContent=v}
+  </script>
+</body>
+</html>
