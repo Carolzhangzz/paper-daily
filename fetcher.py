@@ -143,99 +143,106 @@ def _enrich_hf_categories(papers):
     return papers
 
 
-# ── ACM Venues (CHI, UIST) via Semantic Scholar ─────────────────────────────
+# ── ACM Venues (CHI, UIST) via Crossref ─────────────────────────────────────
 
 import urllib.parse
 
-S2_SEARCH = "https://api.semanticscholar.org/graph/v1/paper/search"
-S2_FIELDS = "title,authors,abstract,url,externalIds,publicationDate,venue"
+CROSSREF_API = "https://api.crossref.org/works"
+CROSSREF_HEADERS = {"User-Agent": "PaperDaily/1.0 (mailto:paper-daily@github.com)"}
 
+# CHI uses a stable title; UIST includes edition number (37th, 38th...) — we try multiple
 VENUES = {
-    "CHI": {"query": "human computer interaction", "venue": "CHI"},
-    "UIST": {"query": "user interface software technology", "venue": "UIST"},
+    "CHI": ["Proceedings of the CHI Conference on Human Factors in Computing Systems"],
+    "UIST": [
+        # UIST title includes edition number, try recent ones
+        f"Proceedings of the {n}th Annual ACM Symposium on User Interface Software and Technology"
+        for n in range(40, 35, -1)  # 40th down to 36th
+    ],
 }
 
 
 def fetch_venue_papers(year=None):
-    """Fetch recent CHI and UIST papers via Semantic Scholar."""
+    """Fetch recent CHI and UIST papers via Crossref API."""
     if year is None:
         from datetime import datetime
         year = datetime.utcnow().year
 
     all_papers = []
-    for tag, cfg in VENUES.items():
-        try:
-            papers = _fetch_s2_venue(cfg["query"], cfg["venue"], tag, year)
-            all_papers.extend(papers)
-            print(f"[INFO] {tag}: {len(papers)} papers")
-        except Exception as e:
-            print(f"[WARN] {tag} fetch failed: {e}")
-        time.sleep(3)  # respect rate limits between venues
+    for tag, title_variants in VENUES.items():
+        found = False
+        for title in title_variants:
+            try:
+                papers = _fetch_crossref_venue(title, tag, year)
+                if papers:
+                    all_papers.extend(papers)
+                    print(f"[INFO] {tag}: {len(papers)} papers")
+                    found = True
+                    break
+            except Exception as e:
+                continue
+        if not found:
+            print(f"[WARN] {tag}: no papers found")
+        time.sleep(1)
 
     return all_papers
 
 
-def _fetch_s2_venue(query, venue, tag, year, limit=100):
-    """Query Semantic Scholar for papers from a specific venue."""
+def _fetch_crossref_venue(container_title, tag, year, limit=100):
+    """Fetch papers from Crossref by venue container title."""
     params = urllib.parse.urlencode({
-        "query": query,
-        "venue": venue,
-        "year": f"{year - 1}-{year}",
-        "fields": S2_FIELDS,
-        "limit": limit,
+        "filter": f"container-title:{container_title},from-pub-date:{year - 2}-01-01",
+        "rows": limit,
+        "sort": "published",
+        "order": "desc",
+        "select": "DOI,title,author,abstract,published,container-title",
+        "mailto": "paper-daily@github.com",
     })
-    url = f"{S2_SEARCH}?{params}"
+    url = f"{CROSSREF_API}?{params}"
 
-    # Retry with backoff for rate limits
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "PaperDaily/1.0"})
-            resp = urllib.request.urlopen(req, timeout=30)
-            data = json.loads(resp.read())
-            break
-        except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < 2:
-                wait = (attempt + 1) * 10
-                print(f"[INFO] Rate limited, waiting {wait}s...")
-                time.sleep(wait)
-                continue
-            raise
-    else:
-        return []
+    req = urllib.request.Request(url, headers=CROSSREF_HEADERS)
+    resp = urllib.request.urlopen(req, timeout=30)
+    data = json.loads(resp.read())
 
     papers = []
-    for item in data.get("data", []):
-        if not item.get("title"):
+    for item in data.get("message", {}).get("items", []):
+        title_list = item.get("title", [])
+        if not title_list:
             continue
+        title = title_list[0]
+        doi = item.get("DOI", "")
 
-        ext_ids = item.get("externalIds", {}) or {}
-        arxiv_id = ext_ids.get("ArXiv", "")
-        doi = ext_ids.get("DOI", "")
-        corpus_id = ext_ids.get("CorpusId", "")
-        paper_id = arxiv_id or f"s2-{corpus_id}"
+        # Parse authors
+        authors = []
+        for a in item.get("author", []):
+            given = a.get("given", "")
+            family = a.get("family", "")
+            authors.append(f"{given} {family}".strip())
 
-        if arxiv_id:
-            paper_url = f"https://arxiv.org/abs/{arxiv_id}"
-            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
-        elif doi:
-            paper_url = f"https://doi.org/{doi}"
-            pdf_url = paper_url
+        # Parse abstract (Crossref returns XML-tagged abstracts)
+        abstract = item.get("abstract", "")
+        if abstract:
+            # Strip JATS XML tags
+            import re
+            abstract = re.sub(r"<[^>]+>", "", abstract).strip()
+
+        # Parse date
+        date_parts = item.get("published", {}).get("date-parts", [[]])
+        if date_parts and date_parts[0]:
+            parts = date_parts[0]
+            pub_date = "-".join(str(p).zfill(2) for p in parts)
         else:
-            paper_url = item.get("url", "")
-            pdf_url = paper_url
-
-        authors = [a.get("name", "") for a in (item.get("authors") or [])]
+            pub_date = ""
 
         papers.append({
-            "arxiv_id": paper_id,
-            "title": item["title"],
+            "arxiv_id": f"doi-{doi}" if doi else f"cr-{title[:30]}",
+            "title": title,
             "authors": authors,
-            "abstract": item.get("abstract") or "",
+            "abstract": abstract,
             "categories": [tag, "cs.HC"],
-            "url": paper_url,
-            "pdf_url": pdf_url,
-            "published": (item.get("publicationDate") or "")[:10],
-            "source": "semantic_scholar",
+            "url": f"https://doi.org/{doi}" if doi else "",
+            "pdf_url": f"https://doi.org/{doi}" if doi else "",
+            "published": pub_date,
+            "source": "crossref",
         })
 
     return papers
