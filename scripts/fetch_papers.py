@@ -8,7 +8,7 @@ from datetime import datetime
 
 # Allow importing fetcher from parent dir
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from fetcher import fetch_arxiv_papers, fetch_hf_daily_papers
+from fetcher import fetch_arxiv_papers, fetch_hf_daily_papers, fetch_venue_papers
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 
@@ -31,6 +31,26 @@ def main():
         print(f"[INFO] HuggingFace: {len(hf)} papers")
     except Exception as e:
         print(f"[WARN] HF fetch failed: {e}")
+
+    try:
+        venue = fetch_venue_papers()
+        papers.extend(venue)
+        print(f"[INFO] Venues (CHI+UIST): {len(venue)} papers")
+    except Exception as e:
+        print(f"[WARN] Venue fetch failed: {e}")
+
+    # Deduplicate by paper ID (prefer arXiv entry if exists)
+    seen = {}
+    for p in papers:
+        pid = p["arxiv_id"]
+        if pid in seen:
+            # Merge categories
+            existing = seen[pid]
+            merged = list(dict.fromkeys(existing["categories"] + p["categories"]))
+            existing["categories"] = merged
+        else:
+            seen[pid] = p
+    papers = list(seen.values())
 
     # Save today's papers
     filepath = os.path.join(DATA_DIR, f"{today}.json")

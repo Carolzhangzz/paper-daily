@@ -1,10 +1,12 @@
-"""Fetch latest papers from arXiv and HuggingFace."""
+"""Fetch latest papers from arXiv, HuggingFace, and ACM venues (CHI/UIST)."""
 
 import json
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 
 ARXIV_API = "http://export.arxiv.org/api/query"
+S2_API = "https://api.semanticscholar.org/graph/v1/paper/search"
 ARXIV_NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "arxiv": "http://arxiv.org/schemas/atom",
@@ -137,5 +139,103 @@ def _enrich_hf_categories(papers):
         print(f"[INFO] Enriched {enriched}/{len(papers)} HF papers with arXiv categories")
     except Exception as e:
         print(f"[WARN] arXiv category enrichment failed: {e}")
+
+    return papers
+
+
+# ── ACM Venues (CHI, UIST) via Semantic Scholar ─────────────────────────────
+
+import urllib.parse
+
+S2_SEARCH = "https://api.semanticscholar.org/graph/v1/paper/search"
+S2_FIELDS = "title,authors,abstract,url,externalIds,publicationDate,venue"
+
+VENUES = {
+    "CHI": {"query": "human computer interaction", "venue": "CHI"},
+    "UIST": {"query": "user interface software technology", "venue": "UIST"},
+}
+
+
+def fetch_venue_papers(year=None):
+    """Fetch recent CHI and UIST papers via Semantic Scholar."""
+    if year is None:
+        from datetime import datetime
+        year = datetime.utcnow().year
+
+    all_papers = []
+    for tag, cfg in VENUES.items():
+        try:
+            papers = _fetch_s2_venue(cfg["query"], cfg["venue"], tag, year)
+            all_papers.extend(papers)
+            print(f"[INFO] {tag}: {len(papers)} papers")
+        except Exception as e:
+            print(f"[WARN] {tag} fetch failed: {e}")
+        time.sleep(3)  # respect rate limits between venues
+
+    return all_papers
+
+
+def _fetch_s2_venue(query, venue, tag, year, limit=100):
+    """Query Semantic Scholar for papers from a specific venue."""
+    params = urllib.parse.urlencode({
+        "query": query,
+        "venue": venue,
+        "year": f"{year - 1}-{year}",
+        "fields": S2_FIELDS,
+        "limit": limit,
+    })
+    url = f"{S2_SEARCH}?{params}"
+
+    # Retry with backoff for rate limits
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "PaperDaily/1.0"})
+            resp = urllib.request.urlopen(req, timeout=30)
+            data = json.loads(resp.read())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 2:
+                wait = (attempt + 1) * 10
+                print(f"[INFO] Rate limited, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            raise
+    else:
+        return []
+
+    papers = []
+    for item in data.get("data", []):
+        if not item.get("title"):
+            continue
+
+        ext_ids = item.get("externalIds", {}) or {}
+        arxiv_id = ext_ids.get("ArXiv", "")
+        doi = ext_ids.get("DOI", "")
+        corpus_id = ext_ids.get("CorpusId", "")
+        paper_id = arxiv_id or f"s2-{corpus_id}"
+
+        if arxiv_id:
+            paper_url = f"https://arxiv.org/abs/{arxiv_id}"
+            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
+        elif doi:
+            paper_url = f"https://doi.org/{doi}"
+            pdf_url = paper_url
+        else:
+            paper_url = item.get("url", "")
+            pdf_url = paper_url
+
+        authors = [a.get("name", "") for a in (item.get("authors") or [])]
+
+        papers.append({
+            "arxiv_id": paper_id,
+            "title": item["title"],
+            "authors": authors,
+            "abstract": item.get("abstract") or "",
+            "categories": [tag, "cs.HC"],
+            "url": paper_url,
+            "pdf_url": pdf_url,
+            "published": (item.get("publicationDate") or "")[:10],
+            "source": "semantic_scholar",
+        })
 
     return papers

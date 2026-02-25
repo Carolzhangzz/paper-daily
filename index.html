@@ -54,6 +54,8 @@
       <button class="tab-btn" data-cat="cs.AI">AI <span class="ml-1 opacity-70" id="count-cs.AI"></span></button>
       <button class="tab-btn" data-cat="cs.CL">NLP <span class="ml-1 opacity-70" id="count-cs.CL"></span></button>
       <button class="tab-btn" data-cat="cs.LG">ML <span class="ml-1 opacity-70" id="count-cs.LG"></span></button>
+      <button class="tab-btn" data-cat="CHI">CHI <span class="ml-1 opacity-70" id="count-CHI"></span></button>
+      <button class="tab-btn" data-cat="UIST">UIST <span class="ml-1 opacity-70" id="count-UIST"></span></button>
       <button class="tab-btn" data-cat="trending">Trending <span class="ml-1 opacity-70" id="count-trending"></span></button>
       <button class="tab-btn" data-cat="starred"><span class="text-amber-500">&#9733;</span> Starred <span class="ml-1 opacity-70" id="count-starred"></span></button>
     </div>
@@ -88,6 +90,8 @@
       'cs.CL':'bg-emerald-100 text-emerald-700','cs.LG':'bg-amber-100 text-amber-700',
       'cs.CV':'bg-rose-100 text-rose-700','cs.IR':'bg-cyan-100 text-cyan-700',
       'cs.MA':'bg-teal-100 text-teal-700','cs.RO':'bg-pink-100 text-pink-700',
+      'CHI':'bg-violet-100 text-violet-700',
+      'UIST':'bg-fuchsia-100 text-fuchsia-700',
       'trending':'bg-red-100 text-red-600',
     };
     const DEFAULT_STYLE = 'bg-slate-100 text-slate-600';
@@ -166,7 +170,7 @@
     function updateStats(){
       const all=state.allPapers;
       setText('count-all',all.length||'');
-      const cats=['cs.HC','cs.AI','cs.CL','cs.LG','trending'];
+      const cats=['cs.HC','cs.AI','cs.CL','cs.LG','CHI','UIST','trending'];
       cats.forEach(c=>setText(`count-${c}`,all.filter(p=>(p.categories||[]).includes(c)).length||''));
       setText('count-starred',Object.keys(stars).length||'');
     }
