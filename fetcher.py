@@ -67,7 +67,7 @@ def _parse_arxiv_entry(entry):
 
 
 def fetch_hf_daily_papers():
-    """Fetch trending papers from HuggingFace Daily Papers."""
+    """Fetch trending papers from HuggingFace Daily Papers, then enrich with arXiv categories."""
     try:
         url = "https://huggingface.co/api/daily_papers"
         req = urllib.request.Request(url, headers={"User-Agent": "PaperDaily/1.0"})
@@ -95,7 +95,47 @@ def fetch_hf_daily_papers():
                     "source": "huggingface",
                 }
             )
+
+        # Enrich with real arXiv categories via batch lookup
+        if papers:
+            papers = _enrich_hf_categories(papers)
+
         return papers
     except Exception as e:
         print(f"[WARN] HuggingFace fetch failed: {e}")
         return []
+
+
+def _enrich_hf_categories(papers):
+    """Batch-query arXiv to get real categories for HuggingFace papers."""
+    id_list = ",".join(p["arxiv_id"] for p in papers)
+    url = f"{ARXIV_API}?id_list={id_list}&max_results={len(papers)}"
+
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "PaperDaily/1.0"})
+        resp = urllib.request.urlopen(req, timeout=30)
+        root = ET.fromstring(resp.read())
+
+        # Build a map: arxiv_id -> [categories]
+        cat_map = {}
+        for entry in root.findall("atom:entry", ARXIV_NS):
+            id_text = entry.find("atom:id", ARXIV_NS).text
+            aid = id_text.split("/abs/")[-1].split("v")[0]  # strip version suffix
+            cats = [
+                c.get("term")
+                for c in entry.findall("atom:category", ARXIV_NS)
+                if c.get("term", "").startswith("cs.")
+            ]
+            cat_map[aid] = cats
+
+        # Merge: keep "trending" tag + add real arXiv categories
+        for p in papers:
+            real_cats = cat_map.get(p["arxiv_id"], [])
+            p["categories"] = list(dict.fromkeys(["trending"] + real_cats))
+
+        enriched = sum(1 for p in papers if len(p["categories"]) > 1)
+        print(f"[INFO] Enriched {enriched}/{len(papers)} HF papers with arXiv categories")
+    except Exception as e:
+        print(f"[WARN] arXiv category enrichment failed: {e}")
+
+    return papers

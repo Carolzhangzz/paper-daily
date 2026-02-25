@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paper Daily</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', 'Inter', 'Segoe UI', 'Noto Sans SC', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .abstract-text { max-height: 0; overflow: hidden; transition: max-height 0.3s ease; }
+    .abstract-text.open { max-height: 800px; }
+    .cat-pill { @apply px-2 py-0.5 rounded-full text-xs font-medium; }
+    .tab-btn { @apply px-4 py-2 text-sm font-medium rounded-lg transition-colors; }
+    .tab-btn.active { @apply bg-indigo-600 text-white shadow-sm; }
+    .tab-btn:not(.active) { @apply text-slate-600 hover:bg-slate-200; }
+    body { -webkit-font-smoothing: antialiased; }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen text-slate-800">
+
+  <!-- Header -->
+  <header class="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-slate-200">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+      <h1 class="text-xl font-bold text-indigo-600 whitespace-nowrap tracking-tight">Paper Daily</h1>
+
+      <!-- Search -->
+      <div class="flex-1 max-w-md">
+        <input id="searchInput" type="text" placeholder="Search papers..."
+          class="w-full px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-sm
+                 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent
+                 placeholder:text-slate-400">
+      </div>
+
+      <!-- Date nav + fetch -->
+      <div class="flex items-center gap-2">
+        <button id="prevDate" class="p-1.5 rounded-md hover:bg-slate-100 text-slate-500">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <span id="currentDate" class="text-sm font-medium text-slate-700 min-w-[90px] text-center"></span>
+        <button id="nextDate" class="p-1.5 rounded-md hover:bg-slate-100 text-slate-500">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+        <button id="fetchBtn" onclick="manualFetch()"
+          class="ml-2 px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg
+                 hover:bg-indigo-700 transition-colors whitespace-nowrap">
+          Fetch
+        </button>
+      </div>
+    </div>
+
+    <!-- Category tabs -->
+    <div class="max-w-5xl mx-auto px-4 pb-2 flex gap-1.5 overflow-x-auto">
+      <button class="tab-btn active" data-cat="all">
+        All <span class="ml-1 opacity-70" id="count-all"></span>
+      </button>
+      <button class="tab-btn" data-cat="cs.HC">
+        HCI <span class="ml-1 opacity-70" id="count-cs.HC"></span>
+      </button>
+      <button class="tab-btn" data-cat="cs.AI">
+        AI <span class="ml-1 opacity-70" id="count-cs.AI"></span>
+      </button>
+      <button class="tab-btn" data-cat="cs.CL">
+        NLP <span class="ml-1 opacity-70" id="count-cs.CL"></span>
+      </button>
+      <button class="tab-btn" data-cat="cs.LG">
+        ML <span class="ml-1 opacity-70" id="count-cs.LG"></span>
+      </button>
+      <button class="tab-btn" data-cat="trending">
+        Trending <span class="ml-1 opacity-70" id="count-trending"></span>
+      </button>
+      <button class="tab-btn" data-cat="starred">
+        <span class="text-amber-500">&#9733;</span> Starred <span class="ml-1 opacity-70" id="count-starred"></span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="max-w-5xl mx-auto px-4 py-6">
+    <!-- Loading state -->
+    <div id="loading" class="hidden text-center py-20">
+      <div class="inline-block w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+      <p class="mt-3 text-slate-500 text-sm">Loading papers...</p>
+    </div>
+
+    <!-- Empty state -->
+    <div id="empty" class="hidden text-center py-20">
+      <div class="text-5xl mb-4">&#128240;</div>
+      <p class="text-slate-500 mb-4">No papers found for this date</p>
+      <button onclick="manualFetch()"
+        class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm">
+        Fetch Now
+      </button>
+    </div>
+
+    <!-- Paper list -->
+    <div id="paperList" class="space-y-3"></div>
+  </main>
+
+  <!-- Fetch toast -->
+  <div id="toast"
+    class="fixed bottom-6 right-6 px-4 py-2.5 bg-slate-800 text-white text-sm rounded-xl shadow-lg
+           transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none z-50">
+  </div>
+
+  <script>
+    // ── State ───────────────────────────────────────────────────────────────
+    const today = new Date().toISOString().slice(0, 10);
+    let state = {
+      date: today,
+      category: 'all',
+      search: '',
+      papers: [],
+      dates: [],
+    };
+
+    // ── Category styles ─────────────────────────────────────────────────────
+    const CAT_STYLES = {
+      'cs.HC':    'bg-purple-100 text-purple-700',
+      'cs.AI':    'bg-blue-100 text-blue-700',
+      'cs.CL':    'bg-emerald-100 text-emerald-700',
+      'cs.LG':    'bg-amber-100 text-amber-700',
+      'cs.CV':    'bg-rose-100 text-rose-700',
+      'cs.IR':    'bg-cyan-100 text-cyan-700',
+      'cs.MA':    'bg-teal-100 text-teal-700',
+      'cs.RO':    'bg-pink-100 text-pink-700',
+      'trending': 'bg-red-100 text-red-600',
+    };
+    const DEFAULT_CAT_STYLE = 'bg-slate-100 text-slate-600';
+
+    // ── DOM refs ────────────────────────────────────────────────────────────
+    const $list     = document.getElementById('paperList');
+    const $loading  = document.getElementById('loading');
+    const $empty    = document.getElementById('empty');
+    const $date     = document.getElementById('currentDate');
+    const $search   = document.getElementById('searchInput');
+    const $toast    = document.getElementById('toast');
+
+    // ── Init ────────────────────────────────────────────────────────────────
+    init();
+
+    async function init() {
+      $date.textContent = state.date;
+      bindEvents();
+      await Promise.all([loadPapers(), loadStats(), loadDates()]);
+    }
+
+    function bindEvents() {
+      // Tab clicks
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.category = btn.dataset.cat;
+          document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          loadPapers();
+        });
+      });
+
+      // Search
+      let timer;
+      $search.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          state.search = $search.value.trim();
+          loadPapers();
+        }, 300);
+      });
+
+      // Date navigation
+      document.getElementById('prevDate').addEventListener('click', () => changeDate(-1));
+      document.getElementById('nextDate').addEventListener('click', () => changeDate(1));
+    }
+
+    // ── Data loading ────────────────────────────────────────────────────────
+    async function loadPapers() {
+      $loading.classList.remove('hidden');
+      $empty.classList.add('hidden');
+      $list.innerHTML = '';
+
+      const params = new URLSearchParams({
+        date: state.date,
+        category: state.category,
+        q: state.search,
+      });
+
+      try {
+        const resp = await fetch(`/api/papers?${params}`);
+        state.papers = await resp.json();
+      } catch (e) {
+        state.papers = [];
+      }
+
+      $loading.classList.add('hidden');
+
+      if (state.papers.length === 0) {
+        $empty.classList.remove('hidden');
+      } else {
+        renderPapers();
+      }
+    }
+
+    async function loadStats() {
+      try {
+        const resp = await fetch(`/api/stats?date=${state.date}`);
+        const data = await resp.json();
+        setText('count-all', data.total || '');
+        setText('count-starred', data.starred || '');
+        for (const [key, val] of Object.entries(data.categories || {})) {
+          setText(`count-${key}`, val || '');
+        }
+      } catch (e) {}
+    }
+
+    async function loadDates() {
+      try {
+        const resp = await fetch('/api/dates');
+        state.dates = await resp.json();
+      } catch (e) {
+        state.dates = [];
+      }
+    }
+
+    // ── Render ──────────────────────────────────────────────────────────────
+    function renderPapers() {
+      $list.innerHTML = state.papers.map(paperCard).join('');
+    }
+
+    function paperCard(p) {
+      const authors = p.authors.length > 4
+        ? p.authors.slice(0, 3).join(', ') + ` <span class="text-slate-400">+${p.authors.length - 3} more</span>`
+        : p.authors.join(', ');
+
+      const cats = (p.categories || []).map(c => {
+        const style = CAT_STYLES[c] || DEFAULT_CAT_STYLE;
+        return `<span class="cat-pill ${style}">${c}</span>`;
+      }).join('');
+
+      const starClass = p.starred ? 'text-amber-400' : 'text-slate-300 hover:text-amber-300';
+      const starChar = p.starred ? '&#9733;' : '&#9734;';
+
+      const escapedId = p.arxiv_id.replace(/'/g, "\\'");
+
+      return `
+        <article class="bg-white rounded-xl border border-slate-200 hover:border-slate-300
+                        shadow-sm hover:shadow transition-all p-5">
+          <div class="flex gap-3">
+            <!-- Star -->
+            <button onclick="toggleStar('${escapedId}')"
+              class="mt-0.5 text-xl leading-none ${starClass} transition-colors flex-shrink-0"
+              title="Star this paper">${starChar}</button>
+
+            <div class="flex-1 min-w-0">
+              <!-- Title -->
+              <h2 class="text-[15px] font-semibold leading-snug text-slate-800 cursor-pointer
+                         hover:text-indigo-600 transition-colors"
+                  onclick="this.parentElement.querySelector('.abstract-text').classList.toggle('open')">
+                ${esc(p.title)}
+              </h2>
+
+              <!-- Authors -->
+              <p class="mt-1 text-xs text-slate-500 leading-relaxed">${authors}</p>
+
+              <!-- Categories + date -->
+              <div class="mt-2 flex flex-wrap items-center gap-1.5">
+                ${cats}
+                <span class="text-xs text-slate-400 ml-auto">${p.published}</span>
+              </div>
+
+              <!-- Abstract (collapsible) -->
+              <div class="abstract-text mt-3 text-sm text-slate-600 leading-relaxed">
+                <p>${esc(p.abstract)}</p>
+              </div>
+
+              <!-- Action links -->
+              <div class="mt-3 flex gap-3 text-xs">
+                <a href="${p.pdf_url}" target="_blank" rel="noopener"
+                   class="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                          d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0
+                             01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                  </svg>
+                  PDF
+                </a>
+                <a href="${p.url}" target="_blank" rel="noopener"
+                   class="inline-flex items-center gap-1 text-slate-500 hover:text-slate-700 font-medium">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round"
+                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                  </svg>
+                  arXiv
+                </a>
+              </div>
+            </div>
+          </div>
+        </article>`;
+    }
+
+    // ── Actions ─────────────────────────────────────────────────────────────
+    async function toggleStar(arxivId) {
+      await fetch(`/api/star/${encodeURIComponent(arxivId)}`, { method: 'POST' });
+      // Update local state
+      const p = state.papers.find(x => x.arxiv_id === arxivId);
+      if (p) p.starred = p.starred ? 0 : 1;
+      renderPapers();
+      loadStats();
+    }
+
+    async function manualFetch() {
+      const btn = document.getElementById('fetchBtn');
+      btn.textContent = '...';
+      btn.disabled = true;
+      showToast('Fetching latest papers...');
+
+      try {
+        const resp = await fetch('/api/fetch', { method: 'POST' });
+        const data = await resp.json();
+        showToast(`Fetched ${data.count} papers`);
+        await Promise.all([loadPapers(), loadStats(), loadDates()]);
+      } catch (e) {
+        showToast('Fetch failed');
+      }
+
+      btn.textContent = 'Fetch';
+      btn.disabled = false;
+    }
+
+    function changeDate(delta) {
+      const idx = state.dates.indexOf(state.date);
+      if (delta < 0) {
+        // Go to older date
+        if (idx >= 0 && idx < state.dates.length - 1) {
+          state.date = state.dates[idx + 1];
+        } else if (idx === -1 && state.dates.length > 0) {
+          state.date = state.dates[0];
+        }
+      } else {
+        // Go to newer date
+        if (idx > 0) {
+          state.date = state.dates[idx - 1];
+        } else if (idx === -1 && state.dates.length > 0) {
+          state.date = state.dates[0];
+        }
+      }
+      $date.textContent = state.date;
+      loadPapers();
+      loadStats();
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+
+    function setText(id, val) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    }
+
+    function showToast(msg) {
+      $toast.textContent = msg;
+      $toast.classList.remove('translate-y-20', 'opacity-0');
+      setTimeout(() => $toast.classList.add('translate-y-20', 'opacity-0'), 2500);
+    }
+  </script>
+</body>
+</html>
